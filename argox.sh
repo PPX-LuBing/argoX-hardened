@@ -9,8 +9,8 @@ PORT_START_DEFAULT='3002'
 WORK_DIR='/etc/argox'
 TEMP_DIR="$(mktemp -d /tmp/argox.XXXXXX)"
 TLS_SERVER='addons.mozilla.org'
-NGINX_PORT='8080'
-METRICS_PORT='3333'
+: "${NGINX_PORT:=8080}"
+: "${METRICS_PORT:=3333}"
 CDN_DOMAIN=("skk.moe" "ip.sb" "time.is" "cfip.xxxxxxxx.tk" "bestcf.top" "cdn.2020111.xyz" "xn--b6gac.eu.org" "cf.090227.xyz")
 SUBSCRIBE_TEMPLATE="https://raw.githubusercontent.com/fscarmen/client_template/main"
 
@@ -258,6 +258,44 @@ text() {
   [[ "$RAW" == *'$'* ]] && eval "echo \"$RAW\"" || echo "$RAW"
 }
 is_interactive() { [ "$NONINTERACTIVE_INSTALL" != 'noninteractive_install' ]; }
+validate_tcp_port() {
+  local P=$1
+  [[ "$P" =~ ^[0-9]+$ ]] && [ "$P" -ge 1 ] && [ "$P" -le 65535 ]
+}
+configure_origin_ports() {
+  [ -d "$WORK_DIR" ] && return 0
+  if is_interactive; then
+    local CUSTOM_NGINX_PORT CUSTOM_METRICS_PORT
+    if [ "$L" = 'C' ]; then
+      reading "\n (可选) 请输入 Nginx 回源端口 (默认 ${NGINX_PORT}): " CUSTOM_NGINX_PORT
+      reading "\n (可选) 请输入 cloudflared metrics 端口 (默认 ${METRICS_PORT}): " CUSTOM_METRICS_PORT
+    else
+      reading "\n (Optional) Enter Nginx origin port (default ${NGINX_PORT}): " CUSTOM_NGINX_PORT
+      reading "\n (Optional) Enter cloudflared metrics port (default ${METRICS_PORT}): " CUSTOM_METRICS_PORT
+    fi
+    [ -n "$CUSTOM_NGINX_PORT" ] && NGINX_PORT="$CUSTOM_NGINX_PORT"
+    [ -n "$CUSTOM_METRICS_PORT" ] && METRICS_PORT="$CUSTOM_METRICS_PORT"
+  fi
+
+  validate_tcp_port "$NGINX_PORT" || error "Invalid NGINX_PORT: $NGINX_PORT"
+  validate_tcp_port "$METRICS_PORT" || error "Invalid METRICS_PORT: $METRICS_PORT"
+  [ "$NGINX_PORT" = "$METRICS_PORT" ] && error "NGINX_PORT and METRICS_PORT cannot be the same"
+}
+persist_self_script() {
+  local TARGET="$WORK_DIR/argox.sh"
+  [ -s "$TARGET" ] && chmod +x "$TARGET" && return 0
+  if [ -f "$0" ] && [ -r "$0" ]; then
+    cp "$0" "$TARGET" 2>/dev/null && chmod +x "$TARGET" && return 0
+  fi
+  local SRC_URL="${ARGOX_SCRIPT_URL:-https://raw.githubusercontent.com/PPX-LuBing/argoX-hardened/main/argox.sh}"
+  if [ -x "$(type -p curl)" ]; then
+    curl -fsSL "$SRC_URL" -o "$TARGET" 2>/dev/null && chmod +x "$TARGET" && return 0
+  fi
+  if [ -x "$(type -p wget)" ]; then
+    wget -qO "$TARGET" "$SRC_URL" 2>/dev/null && chmod +x "$TARGET" && return 0
+  fi
+  return 1
+}
 
 # 检测是否需要启用 Github CDN，如能直接连通，则不使用
 check_cdn() {
@@ -519,6 +557,7 @@ build_node_name_default() {
 argo_variable() {
   is_interactive && [[ -z "$INSTALL_NGINX" && ! -d $WORK_DIR ]] && reading "\n $(text 68) " INSTALL_NGINX
   INSTALL_NGINX=${INSTALL_NGINX:-"y"}
+  configure_origin_ports
   [ "${INSTALL_NGINX,,}" != 'n' ] && check_nginx >/dev/null 2>&1 &
 
   if grep -qi 'cloudflare' <<< "$ASNORG4$ASNORG6"; then
@@ -1074,7 +1113,7 @@ install_argox() {
   [ ! -d /etc/systemd/system ] && mkdir -p /etc/systemd/system
   mkdir -p $WORK_DIR/subscribe && echo "$L" > $WORK_DIR/language
   [ -s "$VARIABLE_FILE" ] && cp $VARIABLE_FILE $WORK_DIR/
-  [ -f "$0" ] && cp "$0" "$WORK_DIR/argox.sh" && chmod +x "$WORK_DIR/argox.sh"
+  persist_self_script || warning "\nargox script persistence failed: $WORK_DIR/argox.sh\n"
 
   wait
   [[ ! -s $WORK_DIR/cloudflared && -x $TEMP_DIR/cloudflared ]] && mv $TEMP_DIR/cloudflared $WORK_DIR
@@ -1669,6 +1708,7 @@ EOF
 
 # 创建快捷方式
 create_shortcut() {
+  persist_self_script || error "\nargox script missing at $WORK_DIR/argox.sh\n"
   cat > $WORK_DIR/ax.sh << EOF
 #!/usr/bin/env bash
 
@@ -1753,7 +1793,7 @@ export_list() {
   local SHADOWROCKET_SUBSCRIBE="vless://$(echo -n "auto:${UUID}@${SERVER_IP_2}:${REALITY_PORT}" | base64 -w0)?remarks=${NODE_NAME// /%20}%20reality-vision&obfs=none&tls=1&peer=${TLS_SERVER}&xtls=2&pbk=${REALITY_PUBLIC}
 vless://$(echo -n "auto:${UUID}@${SERVER_IP_2}:${REALITY_PORT}" | base64 -w0)?remarks=${NODE_NAME// /%20}%20reality-grpc&path=grpc&obfs=grpc&tls=1&peer=${TLS_SERVER}&pbk=${REALITY_PUBLIC}
 vless://${UUID}@${SERVER}:443?encryption=none&security=tls&type=ws&host=${ARGO_DOMAIN}&path=/${WS_PATH}-vl?ed=2560&sni=${ARGO_DOMAIN}#${NODE_NAME// /%20}-Vl
-vless://${UUID}@${SERVER}:443?encryption=none&security=tls&type=http&host=${ARGO_DOMAIN}&path=/${WS_PATH}-xh&sni=${ARGO_DOMAIN}#${NODE_NAME// /%20}-Xh
+vless://${UUID}@${SERVER}:443?encryption=none&security=tls&type=xhttp&mode=auto&host=${ARGO_DOMAIN}&path=/${WS_PATH}-xh&sni=${ARGO_DOMAIN}#${NODE_NAME// /%20}-Xh
 vmess://$(echo -n "none:${UUID}@${SERVER}:443" | base64 -w0)?remarks=${NODE_NAME// /%20}-Vm&obfsParam=${ARGO_DOMAIN}&path=/${WS_PATH}-vm?ed=2560&obfs=websocket&tls=1&peer=${ARGO_DOMAIN}&alterId=0
 trojan://${UUID}@${SERVER}:443?peer=${ARGO_DOMAIN}&plugin=obfs-local;obfs=websocket;obfs-host=${ARGO_DOMAIN};obfs-uri=/${WS_PATH}-tr?ed=2560#${NODE_NAME// /%20}-Tr
 ss://$(echo -n "chacha20-ietf-poly1305:${UUID}@${SERVER}:443" | base64 -w0)?uot=2&v2ray-plugin=$(echo -n "{\"peer\":\"${ARGO_DOMAIN}\",\"mux\":false,\"path\":\"\\/${WS_PATH}-sh\",\"host\":\"${ARGO_DOMAIN}\",\"mode\":\"websocket\",\"tls\":true}" | base64 -w0)#${NODE_NAME}-Sh"
@@ -1764,7 +1804,7 @@ ss://$(echo -n "chacha20-ietf-poly1305:${UUID}@${SERVER}:443" | base64 -w0)?uot=
   local V2RAYN_SUBSCRIBE="vless://${UUID}@${SERVER_IP_1}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${TLS_SERVER}&fp=chrome&pbk=${REALITY_PUBLIC}&type=tcp&headerType=none#${NODE_NAME}%20reality-vision
 vless://${UUID}@${SERVER_IP_1}:${REALITY_PORT}?security=reality&sni=${TLS_SERVER}&fp=chrome&pbk=${REALITY_PUBLIC}&type=grpc&serviceName=grpc&encryption=none#${NODE_NAME// /%20}%20reality-grpc
 vless://${UUID}@${SERVER}:443?encryption=none&security=tls&sni=${ARGO_DOMAIN}&type=ws&host=${ARGO_DOMAIN}&path=%2F${WS_PATH}-vl%3Fed%3D2560#${NODE_NAME// /%20}-Vl
-vless://${UUID}@${SERVER}:443?encryption=none&security=tls&sni=${ARGO_DOMAIN}&type=http&host=${ARGO_DOMAIN}&path=%2F${WS_PATH}-xh#${NODE_NAME// /%20}-Xh
+vless://${UUID}@${SERVER}:443?encryption=none&security=tls&sni=${ARGO_DOMAIN}&type=xhttp&mode=auto&host=${ARGO_DOMAIN}&path=%2F${WS_PATH}-xh#${NODE_NAME// /%20}-Xh
 vmess://$(echo -n "$VMESS" | base64 -w0)
 trojan://${UUID}@${SERVER}:443?security=tls&sni=${ARGO_DOMAIN}&type=ws&host=${ARGO_DOMAIN}&path=/${WS_PATH}-tr?ed%3D2560#${NODE_NAME// /%20}-Tr
 ss://$(echo -n "${SS_METHOD}:${UUID}" | base64 -w0)@${SERVER}:443?plugin=v2ray-plugin%3Bmode%3Dwebsocket%3Bhost%3D${ARGO_DOMAIN}%3Bpath%3D%2F${WS_PATH}-sh%3Btls#${NODE_NAME// /%20}-Sh
@@ -2065,7 +2105,7 @@ load_kv_file() {
     [[ "$VALUE" =~ ^\".*\"$ ]] && VALUE="${VALUE:1:${#VALUE}-2}"
     [[ "$VALUE" =~ ^\'.*\'$ ]] && VALUE="${VALUE:1:${#VALUE}-2}"
     case "$KEY" in
-      LANGUAGE|L|INSTALL_NGINX|SERVER_IP|ARGO_DOMAIN|ARGO_AUTH|REALITY_PORT|SERVER|CUSTOM_CDN|UUID|WS_PATH|NODE_NAME|REALITY_PRIVATE|REALITY_PUBLIC|PORT_START)
+      LANGUAGE|L|INSTALL_NGINX|SERVER_IP|ARGO_DOMAIN|ARGO_AUTH|REALITY_PORT|SERVER|CUSTOM_CDN|UUID|WS_PATH|NODE_NAME|REALITY_PRIVATE|REALITY_PUBLIC|PORT_START|NGINX_PORT|METRICS_PORT)
         printf -v "$KEY" '%s' "$VALUE"
         ;;
       *)
@@ -2173,7 +2213,7 @@ check_cdn
 [[ "${*,,}" =~ '-e'|'-k' ]] && L=E
 [[ "${*,,}" =~ '-c'|'-b'|'-l' ]] && L=C
 
-while getopts ":AaXxTtDdUuNnVvBbP:p:F:f:KkLl" OPTNAME; do
+while getopts ":AaXxTtDdUuNnVvBbP:p:F:f:KkLlO:o:M:m:" OPTNAME; do
   case "${OPTNAME,,}" in
     a ) select_language; check_system_info; check_install
         [ "${STATUS[0]}" = "$(text 28)" ] && {
@@ -2206,10 +2246,15 @@ while getopts ":AaXxTtDdUuNnVvBbP:p:F:f:KkLl" OPTNAME; do
     v ) select_language; check_system_info; check_arch; version; exit 0;;
     b ) select_language; run_external_tool_notice bbr; exit ;;
     p ) PORT_START=$OPTARG ;;
+    o ) NGINX_PORT=$OPTARG ;;
+    m ) METRICS_PORT=$OPTARG ;;
     f ) NONINTERACTIVE_INSTALL='noninteractive_install'; VARIABLE_FILE=$OPTARG; load_kv_file "$VARIABLE_FILE" ;;
     k|l ) fast_install_variables ;;
   esac
 done
+
+validate_tcp_port "$NGINX_PORT" || error "Invalid NGINX_PORT: $NGINX_PORT"
+validate_tcp_port "$METRICS_PORT" || error "Invalid METRICS_PORT: $METRICS_PORT"
 
 select_language
 check_root
