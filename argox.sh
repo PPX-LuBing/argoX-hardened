@@ -12,7 +12,7 @@ TLS_SERVER='addons.mozilla.org'
 : "${NGINX_PORT:=8080}"
 : "${METRICS_PORT:=3333}"
 : "${CF_ORIGIN_PORT:=$NGINX_PORT}"
-: "${XHTTP_CF_DIRECT:=y}"
+: "${XHTTP_CF_DIRECT:=n}"
 CDN_DOMAIN=("skk.moe" "ip.sb" "time.is" "cfip.xxxxxxxx.tk" "bestcf.top" "cdn.2020111.xyz" "xn--b6gac.eu.org" "cf.090227.xyz")
 SUBSCRIBE_TEMPLATE="https://raw.githubusercontent.com/fscarmen/client_template/main"
 
@@ -417,11 +417,6 @@ check_install() {
 
   # 检查 argo 服务
   [ -s ${ARGO_DAEMON_FILE} ] && STATUS[0]=$(text 27) && cmd_systemctl status argo &>/dev/null && STATUS[0]=$(text 28)
-  if [ -s ${ARGO_DAEMON_FILE} ]; then
-    local DETECT_ORIGIN_PORT
-    DETECT_ORIGIN_PORT=$(sed -n 's#.*url http://localhost:\([0-9]\+\).*#\1#p' ${ARGO_DAEMON_FILE} | sed -n '1p')
-    validate_tcp_port "$DETECT_ORIGIN_PORT" && CF_ORIGIN_PORT="$DETECT_ORIGIN_PORT"
-  fi
   STATUS[1]=$(text 26)
   # xray systemd 文件存在的话，检测一下是否本脚本安装的，如果不是则提示并提出
   if [ -s ${XRAY_DAEMON_FILE} ]; then
