@@ -2137,8 +2137,8 @@ menu_setting() {
     OPTION[2]="2.  $(text 34)"
     OPTION[3]="3.  $(text 32)"
 
-    ACTION[1]() { fast_install_variables; install_argox; export_list; create_shortcut; exit;}
-    ACTION[2]() { install_argox; export_list; create_shortcut; exit; }
+    ACTION[1]() { fast_install_variables; install_argox; create_shortcut; export_list; exit;}
+    ACTION[2]() { install_argox; create_shortcut; export_list; exit; }
     ACTION[3]() { run_external_tool_notice bbr; exit; }
   fi
 
