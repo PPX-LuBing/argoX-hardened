@@ -11,6 +11,8 @@ TEMP_DIR="$(mktemp -d /tmp/argox.XXXXXX)"
 TLS_SERVER='addons.mozilla.org'
 : "${NGINX_PORT:=8080}"
 : "${METRICS_PORT:=3333}"
+: "${CF_ORIGIN_PORT:=$NGINX_PORT}"
+: "${XHTTP_CF_DIRECT:=y}"
 CDN_DOMAIN=("skk.moe" "ip.sb" "time.is" "cfip.xxxxxxxx.tk" "bestcf.top" "cdn.2020111.xyz" "xn--b6gac.eu.org" "cf.090227.xyz")
 SUBSCRIBE_TEMPLATE="https://raw.githubusercontent.com/fscarmen/client_template/main"
 
@@ -262,6 +264,25 @@ validate_tcp_port() {
   local P=$1
   [[ "$P" =~ ^[0-9]+$ ]] && [ "$P" -ge 1 ] && [ "$P" -le 65535 ]
 }
+resolve_cf_origin_port() {
+  if [ "${XHTTP_CF_DIRECT,,}" = 'y' ]; then
+    local CANDIDATE_XH_PORT="$XH_PORT"
+    if ! validate_tcp_port "$CANDIDATE_XH_PORT" && [ -s "$WORK_DIR/inbound.json" ]; then
+      CANDIDATE_XH_PORT=$(awk '
+        /"path"[[:space:]]*:[[:space:]]*"\/.*-xh"/ {want=1; next}
+        want && /"dest"[[:space:]]*:/ {
+          p=$0
+          gsub(/[^0-9]/, "", p)
+          if (p != "") {print p; exit}
+        }
+      ' "$WORK_DIR/inbound.json")
+    fi
+    validate_tcp_port "$CANDIDATE_XH_PORT" || error "Invalid XH_PORT for xhttp direct origin: ${CANDIDATE_XH_PORT}"
+    CF_ORIGIN_PORT="$CANDIDATE_XH_PORT"
+  fi
+  CF_ORIGIN_PORT=${CF_ORIGIN_PORT:-$NGINX_PORT}
+  validate_tcp_port "$CF_ORIGIN_PORT" || error "Invalid CF_ORIGIN_PORT: $CF_ORIGIN_PORT"
+}
 configure_origin_ports() {
   [ -d "$WORK_DIR" ] && return 0
   if is_interactive; then
@@ -396,6 +417,11 @@ check_install() {
 
   # 检查 argo 服务
   [ -s ${ARGO_DAEMON_FILE} ] && STATUS[0]=$(text 27) && cmd_systemctl status argo &>/dev/null && STATUS[0]=$(text 28)
+  if [ -s ${ARGO_DAEMON_FILE} ]; then
+    local DETECT_ORIGIN_PORT
+    DETECT_ORIGIN_PORT=$(sed -n 's#.*url http://localhost:\([0-9]\+\).*#\1#p' ${ARGO_DAEMON_FILE} | sed -n '1p')
+    validate_tcp_port "$DETECT_ORIGIN_PORT" && CF_ORIGIN_PORT="$DETECT_ORIGIN_PORT"
+  fi
   STATUS[1]=$(text 26)
   # xray systemd 文件存在的话，检测一下是否本脚本安装的，如果不是则提示并提出
   if [ -s ${XRAY_DAEMON_FILE} ]; then
@@ -621,7 +647,7 @@ argo_variable() {
     ARGO_TOKEN=$(awk '{print $NF}' <<< "$ARGO_AUTH")
   elif [[ "${#ARGO_AUTH}" = 40 ]]; then
     hint "\n $(text 78) \n "
-    create_argo_tunnel "${ARGO_AUTH}" "${ARGO_DOMAIN}" "${NGINX_PORT}"
+    create_argo_tunnel "${ARGO_AUTH}" "${ARGO_DOMAIN}" "${CF_ORIGIN_PORT:-$NGINX_PORT}"
     if [[ ! "$ARGO_JSON" =~ TunnelSecret ]]; then
       hint "\n $(text 80) \n "
       unset ARGO_DOMAIN
@@ -644,6 +670,7 @@ xray_variable() {
   done
 
   input_port_start
+  resolve_cf_origin_port
 
   # 提供网上热心网友的anycast域名
   if [ -z "$SERVER" ]; then
@@ -730,6 +757,7 @@ fast_install_variables() {
     ((INTERNAL_PORT_USED_COUNT++))
     [ $INTERNAL_PORT_USED_COUNT -gt 10 ] && error "\n $(text 3) \n"
   done
+  resolve_cf_origin_port
 
   # 输入节点名，以系统的 hostname 作为默认
   check_system_ip
@@ -906,7 +934,7 @@ credentials-file: $WORK_DIR/tunnel.json
 
 ingress:
   - hostname: ${ARGO_DOMAIN}
-    service: http://localhost:${NGINX_PORT}
+    service: http://localhost:${CF_ORIGIN_PORT}
   - service: http_status:404
 EOF
 }
@@ -1117,13 +1145,16 @@ install_argox() {
 
   wait
   [[ ! -s $WORK_DIR/cloudflared && -x $TEMP_DIR/cloudflared ]] && mv $TEMP_DIR/cloudflared $WORK_DIR
+  if [[ "${#ARGO_AUTH}" = 40 && -n "${ARGO_DOMAIN}" ]]; then
+    create_argo_tunnel "${ARGO_AUTH}" "${ARGO_DOMAIN}" "${CF_ORIGIN_PORT}"
+  fi
   if [[ -n "${ARGO_JSON}" && -n "${ARGO_DOMAIN}" ]]; then
     ARGO_RUNS="$WORK_DIR/cloudflared tunnel --edge-ip-version auto --config $WORK_DIR/tunnel.yml run"
     json_argo
   elif [[ -n "${ARGO_TOKEN}" && -n "${ARGO_DOMAIN}" ]]; then
     ARGO_RUNS="$WORK_DIR/cloudflared tunnel --edge-ip-version auto run --token ${ARGO_TOKEN}"
   else
-    ARGO_RUNS="$WORK_DIR/cloudflared tunnel --edge-ip-version auto --no-autoupdate --metrics 0.0.0.0:${METRICS_PORT} --url http://localhost:${NGINX_PORT}"
+    ARGO_RUNS="$WORK_DIR/cloudflared tunnel --edge-ip-version auto --no-autoupdate --metrics 0.0.0.0:${METRICS_PORT} --url http://localhost:${CF_ORIGIN_PORT}"
   fi
 
   # Argo 生成守护进程文件
@@ -1737,7 +1768,7 @@ export_list() {
     fi
   fi
 
-  if grep -qs "^${DAEMON_RUN_PATTERN}.*:${NGINX_PORT}" ${ARGO_DAEMON_FILE}; then
+  if grep -qs "^${DAEMON_RUN_PATTERN}.*:${CF_ORIGIN_PORT}" ${ARGO_DAEMON_FILE}; then
     local a=5
     until [[ -n "$ARGO_DOMAIN" || "$a" = 0 ]]; do
       sleep 2
@@ -1949,16 +1980,17 @@ change_argo() {
       [ -s $WORK_DIR/tunnel.json ] && rm -f $WORK_DIR/tunnel.{json,yml}
       if [ "$SYSTEM" = 'Alpine' ]; then
         # 修改 Alpine 的 OpenRC 服务文件
-        local ARGS="--edge-ip-version auto --no-autoupdate --metrics 0.0.0.0:${METRICS_PORT} --url http://localhost:${NGINX_PORT}"
+          local ARGS="--edge-ip-version auto --no-autoupdate --metrics 0.0.0.0:${METRICS_PORT} --url http://localhost:${CF_ORIGIN_PORT}"
         sed -i "s@^command_args=.*@command_args=\"$ARGS\"@g" ${ARGO_DAEMON_FILE}
       else
         # 修改 systemd 服务文件
-        sed -i "s@ExecStart=.*@ExecStart=$WORK_DIR/cloudflared tunnel --edge-ip-version auto --no-autoupdate --metrics 0.0.0.0:${METRICS_PORT} --url http://localhost:${NGINX_PORT}@g" ${ARGO_DAEMON_FILE}
+          sed -i "s@ExecStart=.*@ExecStart=$WORK_DIR/cloudflared tunnel --edge-ip-version auto --no-autoupdate --metrics 0.0.0.0:${METRICS_PORT} --url http://localhost:${CF_ORIGIN_PORT}@g" ${ARGO_DAEMON_FILE}
       fi
       ;;
     2 )
       SERVER_IP=$(awk -F '"' '/"SERVER_IP"/{print $4}' "$WORK_DIR/inbound.json")
       argo_variable
+      resolve_cf_origin_port
       cmd_systemctl disable argo
       if [ -n "$ARGO_TOKEN" ]; then
         [ -s $WORK_DIR/tunnel.json ] && rm -f $WORK_DIR/tunnel.{json,yml}
@@ -2105,7 +2137,7 @@ load_kv_file() {
     [[ "$VALUE" =~ ^\".*\"$ ]] && VALUE="${VALUE:1:${#VALUE}-2}"
     [[ "$VALUE" =~ ^\'.*\'$ ]] && VALUE="${VALUE:1:${#VALUE}-2}"
     case "$KEY" in
-      LANGUAGE|L|INSTALL_NGINX|SERVER_IP|ARGO_DOMAIN|ARGO_AUTH|REALITY_PORT|SERVER|CUSTOM_CDN|UUID|WS_PATH|NODE_NAME|REALITY_PRIVATE|REALITY_PUBLIC|PORT_START|NGINX_PORT|METRICS_PORT)
+      LANGUAGE|L|INSTALL_NGINX|SERVER_IP|ARGO_DOMAIN|ARGO_AUTH|REALITY_PORT|SERVER|CUSTOM_CDN|UUID|WS_PATH|NODE_NAME|REALITY_PRIVATE|REALITY_PUBLIC|PORT_START|NGINX_PORT|METRICS_PORT|CF_ORIGIN_PORT|XHTTP_CF_DIRECT)
         printf -v "$KEY" '%s' "$VALUE"
         ;;
       *)
@@ -2153,7 +2185,7 @@ menu_setting() {
       cmd_systemctl enable argo
       sleep 2
       cmd_systemctl status argo &>/dev/null && info "\n Argo $(text 28) $(text 37)" || error " Argo $(text 28) $(text 38) "
-      grep -qs "^${DAEMON_RUN_PATTERN}.*${NGINX_PORT}$" ${ARGO_DAEMON_FILE} && export_list
+      grep -qs "^${DAEMON_RUN_PATTERN}.*${CF_ORIGIN_PORT}$" ${ARGO_DAEMON_FILE} && export_list
     }
 
     [[ ${STATUS[1]} = "$(text 28)" ]] &&
@@ -2213,7 +2245,7 @@ check_cdn
 [[ "${*,,}" =~ '-e'|'-k' ]] && L=E
 [[ "${*,,}" =~ '-c'|'-b'|'-l' ]] && L=C
 
-while getopts ":AaXxTtDdUuNnVvBbP:p:F:f:KkLlO:o:M:m:" OPTNAME; do
+while getopts ":AaXxTtDdUuNnVvBbP:p:F:f:KkLlO:o:M:m:R:r:Qq" OPTNAME; do
   case "${OPTNAME,,}" in
     a ) select_language; check_system_info; check_install
         [ "${STATUS[0]}" = "$(text 28)" ] && {
@@ -2224,7 +2256,7 @@ while getopts ":AaXxTtDdUuNnVvBbP:p:F:f:KkLlO:o:M:m:" OPTNAME; do
           sleep 2
           if cmd_systemctl status argo &>/dev/null; then
             info "\n Argo $(text 28) $(text 37)"
-            grep -qs "^${DAEMON_RUN_PATTERN}.*${NGINX_PORT}$" ${ARGO_DAEMON_FILE} && export_list
+            grep -qs "^${DAEMON_RUN_PATTERN}.*${CF_ORIGIN_PORT}$" ${ARGO_DAEMON_FILE} && export_list
           else
             error " Argo $(text 28) $(text 38) "
           fi
@@ -2248,6 +2280,8 @@ while getopts ":AaXxTtDdUuNnVvBbP:p:F:f:KkLlO:o:M:m:" OPTNAME; do
     p ) PORT_START=$OPTARG ;;
     o ) NGINX_PORT=$OPTARG ;;
     m ) METRICS_PORT=$OPTARG ;;
+    r ) CF_ORIGIN_PORT=$OPTARG ;;
+    q ) XHTTP_CF_DIRECT='y' ;;
     f ) NONINTERACTIVE_INSTALL='noninteractive_install'; VARIABLE_FILE=$OPTARG; load_kv_file "$VARIABLE_FILE" ;;
     k|l ) fast_install_variables ;;
   esac
@@ -2255,6 +2289,7 @@ done
 
 validate_tcp_port "$NGINX_PORT" || error "Invalid NGINX_PORT: $NGINX_PORT"
 validate_tcp_port "$METRICS_PORT" || error "Invalid METRICS_PORT: $METRICS_PORT"
+[[ -n "$CF_ORIGIN_PORT" ]] && validate_tcp_port "$CF_ORIGIN_PORT" || true
 
 select_language
 check_root
