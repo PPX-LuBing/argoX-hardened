@@ -182,8 +182,8 @@ E[52]="Memory Usage"
 C[52]="内存占用"
 E[53]="The xray service is detected to be installed. Script exits."
 C[53]="检测到已安装 xray 服务，脚本退出!"
-E[54]="Warp / warp-go was detected to be running. Please enter the correct server IP:"
-C[54]="检测到 warp / warp-go 正在运行，请输入确认的服务器 IP:"
+E[54]="Cloudflare network is detected. Please enter the correct server IP:"
+C[54]="检测到 Cloudflare 网络环境，请输入确认的服务器 IP:"
 E[56]="\(4/8\) Please enter the Reality port \(Default is \${REALITY_PORT_DEFAULT}\):"
 C[56]="\(4/8\) 请输入 Reality 的端口号 \(默认为 \${REALITY_PORT_DEFAULT}\):"
 E[58]="No server ip, script exits. Feedback:[https://github.com/fscarmen/sing-box/issues]"
@@ -286,16 +286,13 @@ resolve_cf_origin_port() {
 configure_origin_ports() {
   [ -d "$WORK_DIR" ] && return 0
   if is_interactive; then
-    local CUSTOM_NGINX_PORT CUSTOM_METRICS_PORT
+    local CUSTOM_NGINX_PORT
     if [ "$L" = 'C' ]; then
       reading "\n (可选) 请输入 Nginx 回源端口 (默认 ${NGINX_PORT}): " CUSTOM_NGINX_PORT
-      reading "\n (可选) 请输入 cloudflared metrics 端口 (默认 ${METRICS_PORT}): " CUSTOM_METRICS_PORT
     else
       reading "\n (Optional) Enter Nginx origin port (default ${NGINX_PORT}): " CUSTOM_NGINX_PORT
-      reading "\n (Optional) Enter cloudflared metrics port (default ${METRICS_PORT}): " CUSTOM_METRICS_PORT
     fi
     [ -n "$CUSTOM_NGINX_PORT" ] && NGINX_PORT="$CUSTOM_NGINX_PORT"
-    [ -n "$CUSTOM_METRICS_PORT" ] && METRICS_PORT="$CUSTOM_METRICS_PORT"
   fi
 
   validate_tcp_port "$NGINX_PORT" || error "Invalid NGINX_PORT: $NGINX_PORT"
@@ -324,37 +321,6 @@ check_cdn() {
   local PROXY_STATUS_CODE
   PROXY_STATUS_CODE=$(wget --server-response --spider --quiet --timeout=3 --tries=1 https://api.github.com/repos/XTLS/Xray-core/releases/latest 2>&1 | awk '/HTTP\//{last_field = $2} END {print last_field}')
   [ "$PROXY_STATUS_CODE" != "200" ] && warning " $(text 74) "
-}
-
-# 检测是否解锁 chatGPT，以决定是否使用 warp 链式代理或者是 direct out，此处判断改编自 https://github.com/lmc999/RegionRestrictionCheck
-check_chatgpt() {
-  local CHECK_STACK=$1
-  local UA_BROWSER="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-  local UA_SEC_CH_UA='"Google Chrome";v="125", "Chromium";v="125", "Not.A/Brand";v="24"'
-  wget --help | grep -q '\-\-ciphers' && local IS_CIPHERS=is_ciphers
-
-  # 首先检查API访问
-  local CHECK_RESULT1=$(wget --timeout=2 --tries=2 --retry-connrefused --waitretry=5 ${CHECK_STACK} -qO- --content-on-error --header='authority: api.openai.com' --header='accept: */*' --header='accept-language: en-US,en;q=0.9' --header='authorization: Bearer null' --header='content-type: application/json' --header='origin: https://platform.openai.com' --header='referer: https://platform.openai.com/' --header="sec-ch-ua: ${UA_SEC_CH_UA}" --header='sec-ch-ua-mobile: ?0' --header='sec-ch-ua-platform: "Windows"' --header='sec-fetch-dest: empty' --header='sec-fetch-mode: cors' --header='sec-fetch-site: same-site' --user-agent="${UA_BROWSER}" 'https://api.openai.com/compliance/cookie_requirements')
-
-  grep -q "^$" <<< "$CHECK_RESULT1" && grep -qw is_ciphers <<< "$IS_CIPHERS" && local CHECK_RESULT1=$(wget --timeout=2 --tries=2 --retry-connrefused --waitretry=5 ${CHECK_STACK} --ciphers=DEFAULT@SECLEVEL=1 -qO- --content-on-error --header='authority: api.openai.com' --header='accept: */*' --header='accept-language: en-US,en;q=0.9' --header='authorization: Bearer null' --header='content-type: application/json' --header='origin: https://platform.openai.com' --header='referer: https://platform.openai.com/' --header="sec-ch-ua: ${UA_SEC_CH_UA}" --header='sec-ch-ua-mobile: ?0' --header='sec-ch-ua-platform: "Windows"' --header='sec-fetch-dest: empty' --header='sec-fetch-mode: cors' --header='sec-fetch-site: same-site' --user-agent="${UA_BROWSER}" 'https://api.openai.com/compliance/cookie_requirements')
-
-  # 如果API检测失败或者检测到unsupported_country,直接返回ban
-  if grep -q "^$" <<< "$CHECK_RESULT1" || grep -qi 'unsupported_country' <<< "$CHECK_RESULT1"; then
-    echo "ban"
-    return
-  fi
-
-  # API检测通过后,继续检查网页访问
-  local CHECK_RESULT2=$(wget --timeout=2 --tries=2 --retry-connrefused --waitretry=5 ${CHECK_STACK} -qO- --content-on-error --header='authority: ios.chat.openai.com' --header='accept: */*;q=0.8,application/signed-exchange;v=b3;q=0.7' --header='accept-language: en-US,en;q=0.9' --header="sec-ch-ua: ${UA_SEC_CH_UA}" --header='sec-ch-ua-mobile: ?0' --header='sec-ch-ua-platform: "Windows"' --header='sec-fetch-dest: document' --header='sec-fetch-mode: navigate' --header='sec-fetch-site: none' --header='sec-fetch-user: ?1' --header='upgrade-insecure-requests: 1' --user-agent="${UA_BROWSER}" https://ios.chat.openai.com/)
-
-  [ -z "$CHECK_RESULT2" ] && grep -qw is_ciphers <<< "$IS_CIPHERS" && local CHECK_RESULT2=$(wget --timeout=2 --tries=2 --retry-connrefused --waitretry=5 ${CHECK_STACK} --ciphers=DEFAULT@SECLEVEL=1 -qO- --content-on-error --header='authority: ios.chat.openai.com' --header='accept: */*;q=0.8,application/signed-exchange;v=b3;q=0.7' --header='accept-language: en-US,en;q=0.9' --header="sec-ch-ua: ${UA_SEC_CH_UA}" --header='sec-ch-ua-mobile: ?0' --header='sec-ch-ua-platform: "Windows"' --header='sec-fetch-dest: document' --header='sec-fetch-mode: navigate' --header='sec-fetch-site: none' --header='sec-fetch-user: ?1' --header='upgrade-insecure-requests: 1' --user-agent="${UA_BROWSER}" https://ios.chat.openai.com/)
-
-  # 检查第二个结果
-  if [ -z "$CHECK_RESULT2" ] || grep -qi 'VPN' <<< "$CHECK_RESULT2"; then
-    echo "ban"
-  else
-    echo "unlock"
-  fi
 }
 
 # 选择中英语言
@@ -606,15 +572,6 @@ argo_variable() {
     SERVER_IP=${SERVER_IP:-"$SERVER_IP_DEFAULT"}
     [ -z "$SERVER_IP" ] && error " $(text 58) "
 
-    # 检测是否解锁 chatGPT
-    if [ ! -d $WORK_DIR ]; then
-      [[ "$SERVER_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] && CHATGPT_STACK='-4' || CHATGPT_STACK='-6'
-      if [ "$(check_chatgpt ${CHATGPT_STACK})" = 'unlock' ]; then
-        CHAT_GPT_OUT_V4=direct && CHAT_GPT_OUT_V6=direct
-      else
-        CHAT_GPT_OUT_V4=warp-IPv4 && CHAT_GPT_OUT_V6=warp-IPv6
-      fi
-    fi
   fi
 
   # 处理可能输入的错误，去掉开头和结尾的空格，去掉最后的 :
@@ -1064,10 +1021,7 @@ create_argo_tunnel() {
         {
           \"service\": \"http_status:404\"
         }
-      ],
-      \"warp-routing\": {
-        \"enabled\": false
-      }
+      ]
     }
   }" \
   "https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/cfd_tunnel/${TUNNEL_ID}/configurations")
@@ -1631,53 +1585,6 @@ EOF
 
             },
             "tag": "block"
-        },
-        {
-            "protocol": "wireguard",
-            "settings": {
-                "secretKey": "YFYOAdbw1bKTHlNNi+aEjBM3BO7unuFC5rOkMRAz9XY=",
-                "address": [
-                    "172.16.0.2/32",
-                    "2606:4700:110:8a36:df92:102a:9602:fa18/128"
-                ],
-                "peers": [
-                    {
-                        "publicKey": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
-                        "allowedIPs": [
-                            "0.0.0.0/0",
-                            "::/0"
-                        ],
-                        "endpoint": "engage.cloudflareclient.com:2408"
-                    }
-                ],
-                "reserved": [
-                    78,
-                    135,
-                    76
-                ],
-                "mtu": 1280
-            },
-            "tag": "wireguard"
-        },
-        {
-            "protocol": "freedom",
-            "settings": {
-                "domainStrategy": "UseIPv4"
-            },
-            "proxySettings": {
-                "tag": "wireguard"
-            },
-            "tag": "warp-IPv4"
-        },
-        {
-            "protocol": "freedom",
-            "settings": {
-                "domainStrategy": "UseIPv6"
-            },
-            "proxySettings": {
-                "tag": "wireguard"
-            },
-            "tag": "warp-IPv6"
         }
     ],
     "routing": {
@@ -1688,14 +1595,14 @@ EOF
                 "domain": [
                     "api.openai.com"
                 ],
-                "outboundTag": "${CHAT_GPT_OUT_V4}"
+                "outboundTag": "direct"
             },
             {
                 "type": "field",
                 "domain": [
                     "geosite:openai"
                 ],
-                "outboundTag": "${CHAT_GPT_OUT_V6}"
+                "outboundTag": "direct"
             }
         ]
     }
@@ -2132,7 +2039,7 @@ load_kv_file() {
     [[ "$VALUE" =~ ^\".*\"$ ]] && VALUE="${VALUE:1:${#VALUE}-2}"
     [[ "$VALUE" =~ ^\'.*\'$ ]] && VALUE="${VALUE:1:${#VALUE}-2}"
     case "$KEY" in
-      LANGUAGE|L|INSTALL_NGINX|SERVER_IP|ARGO_DOMAIN|ARGO_AUTH|REALITY_PORT|SERVER|CUSTOM_CDN|UUID|WS_PATH|NODE_NAME|REALITY_PRIVATE|REALITY_PUBLIC|PORT_START|NGINX_PORT|METRICS_PORT|CF_ORIGIN_PORT|XHTTP_CF_DIRECT)
+      LANGUAGE|L|INSTALL_NGINX|SERVER_IP|ARGO_DOMAIN|ARGO_AUTH|REALITY_PORT|SERVER|CUSTOM_CDN|UUID|WS_PATH|NODE_NAME|REALITY_PRIVATE|REALITY_PUBLIC|PORT_START|NGINX_PORT|CF_ORIGIN_PORT|XHTTP_CF_DIRECT)
         printf -v "$KEY" '%s' "$VALUE"
         ;;
       *)
@@ -2240,7 +2147,7 @@ check_cdn
 [[ "${*,,}" =~ '-e'|'-k' ]] && L=E
 [[ "${*,,}" =~ '-c'|'-b'|'-l' ]] && L=C
 
-while getopts ":AaXxTtDdUuNnVvBbP:p:F:f:KkLlO:o:M:m:R:r:Qq" OPTNAME; do
+while getopts ":AaXxTtDdUuNnVvBbP:p:F:f:KkLlO:o:R:r:Qq" OPTNAME; do
   case "${OPTNAME,,}" in
     a ) select_language; check_system_info; check_install
         [ "${STATUS[0]}" = "$(text 28)" ] && {
@@ -2274,7 +2181,6 @@ while getopts ":AaXxTtDdUuNnVvBbP:p:F:f:KkLlO:o:M:m:R:r:Qq" OPTNAME; do
     b ) select_language; run_external_tool_notice bbr; exit ;;
     p ) PORT_START=$OPTARG ;;
     o ) NGINX_PORT=$OPTARG ;;
-    m ) METRICS_PORT=$OPTARG ;;
     r ) CF_ORIGIN_PORT=$OPTARG ;;
     q ) XHTTP_CF_DIRECT='y' ;;
     f ) NONINTERACTIVE_INSTALL='noninteractive_install'; VARIABLE_FILE=$OPTARG; load_kv_file "$VARIABLE_FILE" ;;
