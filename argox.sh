@@ -443,6 +443,28 @@ cmd_systemctl() {
   fi
 }
 
+xray_failure_diagnose() {
+  local XRAY_TEST_OUTPUT=''
+  if [ -x "$WORK_DIR/xray" ] && [ -s "$WORK_DIR/inbound.json" ] && [ -s "$WORK_DIR/outbound.json" ]; then
+    XRAY_TEST_OUTPUT=$($WORK_DIR/xray run -test -c "$WORK_DIR/inbound.json" -c "$WORK_DIR/outbound.json" 2>&1)
+    [ -n "$XRAY_TEST_OUTPUT" ] && warning "\nXray config test output:\n$XRAY_TEST_OUTPUT\n"
+  fi
+
+  if [ "$SYSTEM" = 'Alpine' ]; then
+    [ -s "$WORK_DIR/xray.log" ] && warning "\nXray runtime log: $WORK_DIR/xray.log\n"
+  else
+    local XRAY_JOURNAL
+    XRAY_JOURNAL=$(journalctl -u xray -n 30 --no-pager 2>/dev/null)
+    [ -n "$XRAY_JOURNAL" ] && warning "\nRecent xray.service logs:\n$XRAY_JOURNAL\n"
+  fi
+}
+
+xray_status_or_report() {
+  cmd_systemctl status xray &>/dev/null && return 0
+  xray_failure_diagnose
+  return 1
+}
+
 check_system_info() {
   [ -s /etc/os-release ] && SYS="$(awk -F '"' 'tolower($0) ~ /pretty_name/{print $2}' /etc/os-release)"
   [[ -z "$SYS" && -x "$(type -p hostnamectl)" ]] && SYS="$(hostnamectl | awk -F ': ' 'tolower($0) ~ /operating system/{print $2}')"
@@ -1632,7 +1654,7 @@ EOF
       ;;
     "$(text 27)" )
       cmd_systemctl enable xray
-      cmd_systemctl status xray &>/dev/null && info "\n Xray $(text 28) $(text 37) \n" || warning "\n Xray $(text 28) $(text 38) \n"
+      xray_status_or_report && info "\n Xray $(text 28) $(text 37) \n" || warning "\n Xray $(text 28) $(text 38) \n"
       ;;
     "$(text 28)" )
       info "\n Xray $(text 28) $(text 37) \n"
@@ -2008,7 +2030,7 @@ version() {
       cmd_systemctl disable xray
       unzip -qo $TEMP_DIR/Xray-linux-$XRAY_ARCH.zip xray *.dat -d $WORK_DIR; rm -f $TEMP_DIR/Xray*.zip
       cmd_systemctl enable xray
-      cmd_systemctl status xray &>/dev/null && info " Xray $(text 28) $(text 37)" || error " Xray $(text 28) $(text 38) "
+      xray_status_or_report && info " Xray $(text 28) $(text 37)" || error " Xray $(text 28) $(text 38) "
     else
       local APP=Xray && error "\n $(text 48) "
     fi
@@ -2098,7 +2120,7 @@ menu_setting() {
     ACTION[3]() {
       cmd_systemctl enable xray
       sleep 2
-      cmd_systemctl status xray &>/dev/null && info "\n Xray $(text 28) $(text 37)" || error " Xray $(text 28) $(text 38) "
+      xray_status_or_report && info "\n Xray $(text 28) $(text 37)" || error " Xray $(text 28) $(text 38) "
     }
     ACTION[4]() { change_argo; exit; }
     ACTION[5]() { change_cdn; exit; }
@@ -2171,7 +2193,7 @@ while getopts ":AaXxTtDdUuNnVvBbP:p:F:f:KkLlO:o:R:r:Qq" OPTNAME; do
         } || {
           cmd_systemctl enable xray
           sleep 2
-          cmd_systemctl status xray &>/dev/null && info "\n Xray $(text 28) $(text 37)" || error " Xray $(text 28) $(text 38) "
+          xray_status_or_report && info "\n Xray $(text 28) $(text 37)" || error " Xray $(text 28) $(text 38) "
         }; exit 0 ;;
     t ) select_language; check_system_info; change_argo; exit 0 ;;
     d ) select_language; check_system_info; change_cdn; exit 0 ;;
