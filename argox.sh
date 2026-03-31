@@ -356,8 +356,14 @@ load_kv_file() {
 persist_self_script() {
   local TARGET="$WORK_DIR/argox.sh"
   [ -s "$TARGET" ] && chmod +x "$TARGET" && return 0
-  if [ -f "$0" ] && [ -r "$0" ]; then
-    cp "$0" "$TARGET" 2>/dev/null && chmod +x "$TARGET" && return 0
+  local SRC="${BASH_SOURCE[0]:-$0}"
+  case "$SRC" in
+    /dev/fd/*|/proc/*/fd/* )
+      return 1
+      ;;
+  esac
+  if [ -f "$SRC" ] && [ -r "$SRC" ] && [ -s "$SRC" ]; then
+    cp "$SRC" "$TARGET" 2>/dev/null && chmod +x "$TARGET" && return 0
   fi
   return 1
 }
@@ -2159,7 +2165,12 @@ EOF
 # 创建快捷方式
 create_shortcut() {
   local QUIET_MODE=$1
-  persist_self_script || error "\nargox script persistence failed: $WORK_DIR/argox.sh\n"
+  if ! persist_self_script && [ ! -s "$WORK_DIR/argox.sh" ]; then
+    [ "$QUIET_MODE" = 'quiet' ] && return 0
+    warning "\nargox shortcut was not created because script source is ephemeral (e.g. bash <(curl ...)).\n"
+    warning "Please save argox.sh locally and run it once to enable persistent argox command.\n"
+    return 0
+  fi
   cat > $WORK_DIR/ax.sh << EOF
 #!/usr/bin/env bash
 
@@ -2176,6 +2187,7 @@ EOF
 
 ensure_shortcut_available() {
   [ "$(id -u)" = '0' ] || return 0
+  [ -s "$WORK_DIR/argox.sh" ] || return 0
   create_shortcut quiet >/dev/null 2>&1 || true
 }
 
