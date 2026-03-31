@@ -2158,6 +2158,7 @@ EOF
 
 # 创建快捷方式
 create_shortcut() {
+  local QUIET_MODE=$1
   persist_self_script || error "\nargox script persistence failed: $WORK_DIR/argox.sh\n"
   cat > $WORK_DIR/ax.sh << EOF
 #!/usr/bin/env bash
@@ -2165,9 +2166,17 @@ create_shortcut() {
 exec /bin/bash ${WORK_DIR}/argox.sh "\$@"
 EOF
   chmod +x $WORK_DIR/ax.sh
-  ln -sf $WORK_DIR/ax.sh /usr/bin/argox
+  [ -d /usr/bin ] && ln -sf $WORK_DIR/ax.sh /usr/bin/argox
+  [ -d /usr/local/bin ] && ln -sf $WORK_DIR/ax.sh /usr/local/bin/argox
 
-  [ -s /usr/bin/argox ] && hint "\n $(text 62) "
+  if [ "$QUIET_MODE" != 'quiet' ] && { [ -L /usr/bin/argox ] || [ -L /usr/local/bin/argox ]; }; then
+    hint "\n $(text 62) "
+  fi
+}
+
+ensure_shortcut_available() {
+  [ "$(id -u)" = '0' ] || return 0
+  create_shortcut quiet >/dev/null 2>&1 || true
 }
 
 export_list() {
@@ -2884,7 +2893,7 @@ uninstall() {
     fi
     reading "\n $(text 65) " REMOVE_NGINX
     [ "${REMOVE_NGINX,,}" = 'y' ] && ${PACKAGE_UNINSTALL[int]} nginx >/dev/null 2>&1
-    [ "$SYSTEM" = 'Alpine' ] && rm -rf $WORK_DIR $TEMP_DIR /etc/init.d/{xray,argo} /usr/bin/argox || rm -rf $WORK_DIR $TEMP_DIR /etc/systemd/system/{xray,argo}.service /usr/bin/argox
+    [ "$SYSTEM" = 'Alpine' ] && rm -rf $WORK_DIR $TEMP_DIR /etc/init.d/{xray,argo} /usr/bin/argox /usr/local/bin/argox || rm -rf $WORK_DIR $TEMP_DIR /etc/systemd/system/{xray,argo}.service /usr/bin/argox /usr/local/bin/argox
     info "\n $(text 16) \n"
   else
     error "\n $(text 15) \n"
@@ -3127,6 +3136,7 @@ fi
 
 select_language
 check_root
+ensure_shortcut_available
 check_arch
 check_system_info
 check_dependencies
