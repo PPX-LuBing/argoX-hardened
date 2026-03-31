@@ -355,11 +355,21 @@ load_kv_file() {
 
 persist_self_script() {
   local TARGET="$WORK_DIR/argox.sh"
+  local FALLBACK_URL="${ARGOX_SCRIPT_URL:-https://raw.githubusercontent.com/PPX-LuBing/argoX-hardened/main/argox.sh}"
   [ -s "$TARGET" ] && chmod +x "$TARGET" && return 0
   local SRC="${BASH_SOURCE[0]:-$0}"
   case "$SRC" in
     /dev/fd/*|/proc/*/fd/* )
-      return 1
+      if [ -x "$(type -p curl)" ]; then
+        curl -fsSL "$FALLBACK_URL" -o "$TARGET" 2>/dev/null || return 1
+      elif [ -x "$(type -p wget)" ]; then
+        wget -qO "$TARGET" "$FALLBACK_URL" 2>/dev/null || return 1
+      else
+        return 1
+      fi
+      grep -q '^#!/usr/bin/env bash' "$TARGET" 2>/dev/null || return 1
+      chmod +x "$TARGET" 2>/dev/null || true
+      return 0
       ;;
   esac
   if [ -f "$SRC" ] && [ -r "$SRC" ] && [ -s "$SRC" ]; then
@@ -2167,8 +2177,8 @@ create_shortcut() {
   local QUIET_MODE=$1
   if ! persist_self_script && [ ! -s "$WORK_DIR/argox.sh" ]; then
     [ "$QUIET_MODE" = 'quiet' ] && return 0
-    warning "\nargox shortcut was not created because script source is ephemeral (e.g. bash <(curl ...)).\n"
-    warning "Please save argox.sh locally and run it once to enable persistent argox command.\n"
+    warning "\nargox shortcut was not created because script persistence failed.\n"
+    warning "Please ensure curl/wget is available, then rerun the script once.\n"
     return 0
   fi
   cat > $WORK_DIR/ax.sh << EOF
