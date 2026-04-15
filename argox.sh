@@ -2993,20 +2993,51 @@ EOF
 # 创建快捷方式
 create_shortcut() {
   local QUIET_MODE=$1
-  if ! persist_self_script && [ ! -s "$WORK_DIR/argox.sh" ]; then
+  local SHORTCUT_SCRIPT="$WORK_DIR/ax.sh"
+  local LOCAL_SCRIPT="$WORK_DIR/argox.sh"
+  local FALLBACK_URL='https://raw.githubusercontent.com/PPX-LuBing/argoX-hardened/main/argox.sh'
+  if ! persist_self_script && [ ! -s "$LOCAL_SCRIPT" ]; then
     [ "$QUIET_MODE" = 'quiet' ] && return 0
     warning "\nargox shortcut was not created because script persistence failed.\n"
     warning "Please ensure curl/wget is available, then rerun the script once.\n"
     return 0
   fi
-  cat > $WORK_DIR/ax.sh << EOF
+  cat > "$SHORTCUT_SCRIPT" << EOF
 #!/usr/bin/env bash
 
-exec /bin/bash ${WORK_DIR}/argox.sh "\$@"
+WORK_DIR="${WORK_DIR}"
+LOCAL_SCRIPT="${LOCAL_SCRIPT}"
+FALLBACK_URL="${FALLBACK_URL}"
+
+if [ ! -s "\$LOCAL_SCRIPT" ]; then
+  mkdir -p "\$WORK_DIR" 2>/dev/null || true
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "\$FALLBACK_URL" -o "\$LOCAL_SCRIPT" || {
+      printf '%s\n' 'argox shortcut recovery failed: unable to download hardened script.' >&2
+      exit 1
+    }
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "\$LOCAL_SCRIPT" "\$FALLBACK_URL" || {
+      printf '%s\n' 'argox shortcut recovery failed: unable to download hardened script.' >&2
+      exit 1
+    }
+  else
+    printf '%s\n' 'argox shortcut recovery failed: curl or wget is required.' >&2
+    exit 1
+  fi
+  grep -q '^#!/usr/bin/env bash' "\$LOCAL_SCRIPT" 2>/dev/null || {
+    printf '%s\n' 'argox shortcut recovery failed: downloaded script validation failed.' >&2
+    rm -f "\$LOCAL_SCRIPT"
+    exit 1
+  }
+  chmod +x "\$LOCAL_SCRIPT" 2>/dev/null || true
+fi
+
+exec /bin/bash "\$LOCAL_SCRIPT" "\$@"
 EOF
-  chmod +x $WORK_DIR/ax.sh
-  [ -d /usr/bin ] && ln -sf $WORK_DIR/ax.sh /usr/bin/argox
-  [ -d /usr/local/bin ] && ln -sf $WORK_DIR/ax.sh /usr/local/bin/argox
+  chmod +x "$SHORTCUT_SCRIPT"
+  [ -d /usr/bin ] && ln -sf "$SHORTCUT_SCRIPT" /usr/bin/argox
+  [ -d /usr/local/bin ] && ln -sf "$SHORTCUT_SCRIPT" /usr/local/bin/argox
 
   if [ "$QUIET_MODE" != 'quiet' ] && { [ -L /usr/bin/argox ] || [ -L /usr/local/bin/argox ]; }; then
     hint "\n $(text 62) "
