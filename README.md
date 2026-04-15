@@ -22,8 +22,10 @@ bash <(curl -fsSL https://raw.githubusercontent.com/PPX-LuBing/argoX-hardened/ma
 ## 项目特性
 
 - 支持 Argo Tunnel（Try / Token / Json / API 模式）
-- 支持 Xray 多协议入站（含 Reality）
+- 支持 Xray 多协议入站（含 Reality / Hysteria2 / WS / XHTTP / Direct）
 - 可生成常见客户端订阅信息
+- 支持按需增删协议（`argox -r`）
+- 支持优选地址使用域名 / IPv4 / IPv6 及可选端口
 - 支持 systemd / openrc（Alpine）服务管理
 - 提供交互式菜单与命令行参数两种使用方式
 
@@ -44,6 +46,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/PPX-LuBing/argoX-hardened/ma
 -x   开/关 Xray 服务
 -t   更换 Argo 隧道类型
 -d   更换优选域名/CDN
+-r   增加 / 删除协议
 -u   卸载
 -n   输出节点/订阅信息
 -v   检查并升级版本
