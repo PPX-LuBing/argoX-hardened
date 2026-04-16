@@ -287,6 +287,8 @@ E[122]="Please enter Hysteria2 client download speed in Mbps (e.g. 1000):"
 C[122]="请输入 Hysteria2 客户端下行速率 Mbps（纯数字，如 1000）:"
 E[123]="Invalid input, please enter a positive integer."
 C[123]="输入无效，请输入正整数。"
+E[124]="The order of the selected protocols and ports is as follows:"
+C[124]="选择的协议及端口次序如下:"
 
 # 自定义字体彩色，read 函数
 warning() { echo -e "\033[31m\033[01m$*\033[0m"; }         # 红色
@@ -863,6 +865,16 @@ xray_variable() {
 
   # 协议已确定，计算总步骤数
   calc_install_steps
+
+  # 显示选择协议及其次序，输入开始端口号
+  if ! grep -q 'noninteractive_install' <<< "$NONINTERACTIVE_INSTALL" && [ -z "$START_PORT" ]; then
+    hint "\n $(text 124) "
+    for w in "${!INSTALL_PROTOCOLS[@]}"; do
+      local _proto_idx=$(($(asc ${INSTALL_PROTOCOLS[w]}) - 98))
+      local _proto_name="${PROTOCOL_LIST[$_proto_idx]}"
+      [ "$w" -ge 9 ] && hint " $(( w+1 )). ${_proto_name} " || hint " $(( w+1 )) . ${_proto_name} "
+    done
+  fi
 
   local NUM=${#INSTALL_PROTOCOLS[@]}
   if ! grep -q 'noninteractive_install' <<< "$NONINTERACTIVE_INSTALL" && [ -z "$START_PORT" ]; then
@@ -3185,6 +3197,13 @@ export_list() {
     "ss://$(echo -n "${SS_METHOD}:${UUID}" | base64 -w0)@${SERVER}:${SERVER_PORT_NOW}?plugin=v2ray-plugin%3Bmode%3Dwebsocket%3Bhost%3D${ARGO_DOMAIN}%3Bpath%3D%2F${WS_PATH}-sh%3Btls%3Dtrue%3Bservername%3D${ARGO_DOMAIN}%3Bskip-cert-verify%3Dfalse%3Bmux%3D0#${NODE_NAME// /%20}%20ss-ws" \
     "{ \"type\": \"shadowsocks\", \"tag\": \"${NODE_NAME} ss-ws\", \"server\": \"${SERVER}\", \"server_port\": ${SERVER_PORT_NOW}, \"method\": \"chacha20-ietf-poly1305\", \"password\": \"${UUID}\", \"udp_over_tcp\": {\"enabled\": true,\"version\": 2}, \"plugin\": \"v2ray-plugin\", \"plugin_opts\": \"mode=websocket;host=${ARGO_DOMAIN};path=/${WS_PATH}-sh;tls=true;servername=${ARGO_DOMAIN};skip-cert-verify=false;mux=0\"}" \
     "${NODE_NAME} ss-ws"
+
+  # vless-xhttp (Standard XHTTP over Argo/CDN)，临时隧道不支持 VLESS + XHTTP
+  grep -q 'vless-xhttp' <<< "$PROTOS_NOW" && ! grep -q 'trycloudflare\.com$' <<< "${ARGO_DOMAIN}" && _add \
+    "{name: \"${NODE_NAME} vless-xhttp\", type: vless, server: ${SERVER}, port: ${SERVER_PORT_NOW}, uuid: ${UUID}, udp: true, tls: true, network: xhttp, alpn: [h2], servername: ${ARGO_DOMAIN}, client-fingerprint: chrome, encryption: \"\", xhttp-opts: {path: \"/${WS_PATH}-xh\", host: ${ARGO_DOMAIN}} }" \
+    "vless://$(echo -n ":${UUID}@${SERVER}:${SERVER_PORT_NOW}" | base64 -w0)?path=/${WS_PATH}-xh&remarks=${NODE_NAME// /%20}%20vless-xhttp&obfsParam=%7B%22Host%22:%22${ARGO_DOMAIN}%22%7D&obfs=xhttp&tls=1&peer=${ARGO_DOMAIN}&alpn=h2,http/1.1&h2=1&mode=auto" \
+    "vless://${UUID}@${SERVER}:${SERVER_PORT_NOW}?encryption=none&security=tls&sni=${ARGO_DOMAIN}&alpn=h2%2Chttp%2F1.1&type=xhttp&host=${ARGO_DOMAIN}&path=%2F${WS_PATH}-xh&mode=auto#${NODE_NAME// /%20}%20vless-xhttp" \
+    "" ""
 
   # xhttp-h3-direct (修复跨行问题)
   grep -q 'xhttp-h3-direct' <<< "$PROTOS_NOW" && _add \
