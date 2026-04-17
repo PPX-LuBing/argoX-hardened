@@ -2314,8 +2314,6 @@ install_argox() {
   write_custom 'publicKey' "${REALITY_PUBLIC:-__KEY_UNSET__}"
   write_custom 'cdn' "${SERVER:-__CDN_UNSET__}"
   write_custom 'cdnPort' "${SERVER_PORT:-443}"
-  write_custom 'xhttpDec' "${XHTTP_DEC:-none}"
-  write_custom 'xhttpEnc' "${XHTTP_ENC:-none}"
   [ -s "$VARIABLE_FILE" ] && cp $VARIABLE_FILE $WORK_DIR/ && chmod 600 "$WORK_DIR/$(basename "$VARIABLE_FILE")" 2>/dev/null || true
 
   wait
@@ -2496,6 +2494,8 @@ RestartPreventExitStatus=23
   fi
   [ -z "$XHTTP_DEC" ] && XHTTP_DEC='none'
   [ -z "$XHTTP_ENC" ] && XHTTP_ENC='none'
+  write_custom 'xhttpDec' "${XHTTP_DEC:-none}"
+  write_custom 'xhttpEnc' "${XHTTP_ENC:-none}"
 
   for proto in "${INSTALL_PROTOCOLS[@]}"; do
     local BLOCK=''
