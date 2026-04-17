@@ -372,7 +372,7 @@ load_kv_file() {
     [[ "$VALUE" =~ ^\".*\"$ ]] && VALUE="${VALUE:1:${#VALUE}-2}"
     [[ "$VALUE" =~ ^\'.*\'$ ]] && VALUE="${VALUE:1:${#VALUE}-2}"
     case "$KEY" in
-      LANGUAGE|L|SERVER_IP|ARGO_DOMAIN|ARGO_AUTH|UUID|WS_PATH|NODE_NAME|REALITY_PRIVATE|REALITY_PUBLIC|START_PORT|NGINX_PORT|TLS_SERVER|PORT_HOPPING_RANGE|XHTTP_ENC)
+      LANGUAGE|L|SERVER_IP|ARGO_DOMAIN|ARGO_AUTH|UUID|WS_PATH|NODE_NAME|REALITY_PRIVATE|REALITY_PUBLIC|START_PORT|NGINX_PORT|TLS_SERVER|PORT_HOPPING_RANGE|XHTTP_DEC|XHTTP_ENC)
         printf -v "$KEY" '%s' "$VALUE"
         ;;
       INSTALL_PROTOCOLS)
@@ -800,20 +800,23 @@ generate_reality_keypair() {
   fi
 }
 
-# 生成 VLESS enc 对应的 inbound decryption 配置（优先使用 xray vlessenc）
-generate_xhttp_decryption_default() {
+# 生成 XHTTP VLESS enc 参数对（inbound decryption + client encryption）
+generate_xhttp_vlessenc_pair() {
   local _XRAY_BIN="$WORK_DIR/xray"
   [ ! -x "$_XRAY_BIN" ] && _XRAY_BIN="$TEMP_DIR/xray"
-  [ ! -x "$_XRAY_BIN" ] && { printf 'none'; return 0; }
+  [ ! -x "$_XRAY_BIN" ] && return 0
 
-  local _OUT _DEC
+  local _OUT _MLKEM_DEC _MLKEM_ENC _ANY_DEC _ANY_ENC
   _OUT=$("$_XRAY_BIN" vlessenc 2>/dev/null)
-  _DEC=$(awk -F '"' '/"decryption":/{print $4; exit}' <<< "$_OUT")
-  if [ -n "$_DEC" ]; then
-    printf '%s' "$_DEC"
-  else
-    printf 'none'
-  fi
+
+  _MLKEM_DEC=$(awk -F '"' '/Authentication: ML-KEM-768/{f=1; next} /^Authentication:/{if(f){f=0}} f && /"decryption":/{print $4; exit}' <<< "$_OUT")
+  _MLKEM_ENC=$(awk -F '"' '/Authentication: ML-KEM-768/{f=1; next} /^Authentication:/{if(f){f=0}} f && /"encryption":/{print $4; exit}' <<< "$_OUT")
+
+  _ANY_DEC=$(awk -F '"' '/"decryption":/{print $4; exit}' <<< "$_OUT")
+  _ANY_ENC=$(awk -F '"' '/"encryption":/{print $4; exit}' <<< "$_OUT")
+
+  [ -n "$_MLKEM_DEC" ] && XHTTP_DEC="$_MLKEM_DEC" || XHTTP_DEC="$_ANY_DEC"
+  [ -n "$_MLKEM_ENC" ] && XHTTP_ENC="$_MLKEM_ENC" || XHTTP_ENC="$_ANY_ENC"
 }
 
 # 定义 Xray 相关变量，包含协议选择交互和相关配置
@@ -1076,6 +1079,7 @@ xray_variable() {
       [ "$a" = 0 ] && error " $(text 3) " || reading " $(text 14) " WS_PATH
     done
     WS_PATH=${WS_PATH:-"$WS_PATH_DEFAULT"}
+    XHTTP_DEC=${XHTTP_DEC:-"none"}
     XHTTP_ENC=${XHTTP_ENC:-"none"}
   fi
 
@@ -1163,6 +1167,7 @@ fast_install_variables() {
   fi
   UUID=${UUID:-$(cat /proc/sys/kernel/random/uuid)}
   WS_PATH=${WS_PATH:-"$WS_PATH_DEFAULT"}
+  XHTTP_DEC=${XHTTP_DEC:-"none"}
   XHTTP_ENC=${XHTTP_ENC:-"none"}
   NGINX_PORT=${NGINX_PORT:-"$NGINX_PORT_DEFAULT"}
 
@@ -1327,7 +1332,7 @@ is_valid_server_ip() {
 # 从已安装的 inbound.json / protocols 等配置文件中读取各参数，供 export_list / change_protocols 复用
 fetch_nodes_value() {
   unset SERVER_IP REALITY_PORT REALITY_PUBLIC REALITY_PRIVATE TLS_SERVER SERVER SERVER_PORT SERVER_DISPLAY UUID WS_PATH NODE_NAME SS_METHOD SS2022_PASSWORD \
-        GRPC_PORT HY2_PORT TROJAN_PORT SS2022_PORT SERVER_IP_1 SERVER_IP_2 HY2_UP_NOW HY2_DOWN_NOW XHTTP_ENC
+        GRPC_PORT HY2_PORT TROJAN_PORT SS2022_PORT SERVER_IP_1 SERVER_IP_2 HY2_UP_NOW HY2_DOWN_NOW XHTTP_DEC XHTTP_ENC
 
   SERVER_IP="$(read_custom_value 'serverIp')"
   REALITY_PRIVATE="$(read_custom_value 'privateKey')"
@@ -1358,8 +1363,10 @@ fetch_nodes_value() {
   [ -z "$SS2022_PASSWORD" ] && SS2022_PASSWORD="$(openssl rand -base64 16)"
   TROJAN_PORT=$(echo "$JSON" | $WORK_DIR/jq -r '[.inbounds[] | select(.tag | split(" ")[-1] == "trojan-direct") | .port] | .[0] // empty' 2>/dev/null)
   SS2022_PORT=$(echo "$JSON" | $WORK_DIR/jq -r '[.inbounds[] | select(.tag | split(" ")[-1] == "ss2022-direct") | .port] | .[0] // empty' 2>/dev/null)
-  XHTTP_ENC=$(echo "$JSON" | $WORK_DIR/jq -r '[.inbounds[] | select((.tag | split(" ")[-1]) == "vless-xhttp" or (.tag | split(" ")[-1]) == "xhttp-h3-direct") | .settings.decryption // empty] | .[0] // empty' 2>/dev/null)
-  [ -z "$XHTTP_ENC" ] && XHTTP_ENC="$(read_custom_value 'xhttpEnc')"
+  XHTTP_DEC=$(echo "$JSON" | $WORK_DIR/jq -r '[.inbounds[] | select((.tag | split(" ")[-1]) == "vless-xhttp" or (.tag | split(" ")[-1]) == "xhttp-h3-direct") | .settings.decryption // empty] | .[0] // empty' 2>/dev/null)
+  [ -z "$XHTTP_DEC" ] && XHTTP_DEC="$(read_custom_value 'xhttpDec')"
+  [ -z "$XHTTP_DEC" ] && XHTTP_DEC='none'
+  XHTTP_ENC="$(read_custom_value 'xhttpEnc')"
   [ -z "$XHTTP_ENC" ] && XHTTP_ENC='none'
 
   [ -z "$WS_PATH" ] && WS_PATH="$WS_PATH_DEFAULT"
@@ -2307,6 +2314,7 @@ install_argox() {
   write_custom 'publicKey' "${REALITY_PUBLIC:-__KEY_UNSET__}"
   write_custom 'cdn' "${SERVER:-__CDN_UNSET__}"
   write_custom 'cdnPort' "${SERVER_PORT:-443}"
+  write_custom 'xhttpDec' "${XHTTP_DEC:-none}"
   write_custom 'xhttpEnc' "${XHTTP_ENC:-none}"
   [ -s "$VARIABLE_FILE" ] && cp $VARIABLE_FILE $WORK_DIR/ && chmod 600 "$WORK_DIR/$(basename "$VARIABLE_FILE")" 2>/dev/null || true
 
@@ -2483,9 +2491,10 @@ RestartPreventExitStatus=23
   for proto in "${INSTALL_PROTOCOLS[@]}"; do
     [[ "$proto" =~ ^[ij]$ ]] && _HAS_XHTTP_SELECTED=true && break
   done
-  if $_HAS_XHTTP_SELECTED && [[ -z "$XHTTP_ENC" || "$XHTTP_ENC" == 'none' ]]; then
-    XHTTP_ENC=$(generate_xhttp_decryption_default)
+  if $_HAS_XHTTP_SELECTED && { [[ -z "$XHTTP_DEC" || "$XHTTP_DEC" == 'none' ]] || [[ -z "$XHTTP_ENC" || "$XHTTP_ENC" == 'none' ]]; }; then
+    generate_xhttp_vlessenc_pair
   fi
+  [ -z "$XHTTP_DEC" ] && XHTTP_DEC='none'
   [ -z "$XHTTP_ENC" ] && XHTTP_ENC='none'
 
   for proto in "${INSTALL_PROTOCOLS[@]}"; do
@@ -2768,7 +2777,7 @@ JSONEOF
             "id": "${UUID}"
           }
         ],
-        "decryption": "${XHTTP_ENC:-none}"
+        "decryption": "${XHTTP_DEC:-none}"
       },
       "streamSettings": {
         "network": "xhttp",
@@ -2793,7 +2802,7 @@ JSONEOF
             "id": "${UUID}"
           }
         ],
-        "decryption": "${XHTTP_ENC:-none}"
+        "decryption": "${XHTTP_DEC:-none}"
       },
       "streamSettings": {
         "network": "xhttp",
@@ -3647,9 +3656,10 @@ change_protocols() {
     [[ "$_t" =~ ^(vless-xhttp|xhttp-h3-direct)$ ]] && _HAS_XHTTP_FINAL=true && break
   done
   $_HAS_WS_XHTTP_FINAL || SERVER='__CDN_UNSET__'
-  if $_HAS_XHTTP_FINAL && [[ -z "$XHTTP_ENC" || "$XHTTP_ENC" == 'none' ]]; then
-    XHTTP_ENC=$(generate_xhttp_decryption_default)
+  if $_HAS_XHTTP_FINAL && { [[ -z "$XHTTP_DEC" || "$XHTTP_DEC" == 'none' ]] || [[ -z "$XHTTP_ENC" || "$XHTTP_ENC" == 'none' ]]; }; then
+    generate_xhttp_vlessenc_pair
   fi
+  [ -z "$XHTTP_DEC" ] && XHTTP_DEC='none'
   [ -z "$XHTTP_ENC" ] && XHTTP_ENC='none'
 
   write_custom 'serverIp' "${SERVER_IP}"
@@ -3657,6 +3667,7 @@ change_protocols() {
   write_custom 'publicKey' "${REALITY_PUBLIC:-__KEY_UNSET__}"
   write_custom 'cdn' "${SERVER:-__CDN_UNSET__}"
   write_custom 'cdnPort' "${SERVER_PORT:-443}"
+  write_custom 'xhttpDec' "${XHTTP_DEC:-none}"
   write_custom 'xhttpEnc' "${XHTTP_ENC:-none}"
 
   cat > $WORK_DIR/inbound.json << EOF
@@ -3683,8 +3694,8 @@ EOF
       vmess-ws) NEW_BLOCK="{\"port\":${WS_PORT_f},\"listen\":\"127.0.0.1\",\"protocol\":\"vmess\",\"tag\":\"${NODE_NAME} vmess-ws\",\"settings\":{\"clients\":[{\"id\":\"${UUID}\",\"alterId\":0}]},\"streamSettings\":{\"network\":\"ws\",\"wsSettings\":{\"path\":\"/${WS_PATH}-vm\"}},\"sniffing\":{\"enabled\":true,\"destOverride\":[\"http\",\"tls\",\"quic\"],\"metadataOnly\":false}}" ;;
       trojan-ws) NEW_BLOCK="{\"port\":${WS_PORT_g},\"listen\":\"127.0.0.1\",\"protocol\":\"trojan\",\"tag\":\"${NODE_NAME} trojan-ws\",\"settings\":{\"clients\":[{\"password\":\"${UUID}\"}]},\"streamSettings\":{\"network\":\"ws\",\"security\":\"none\",\"wsSettings\":{\"path\":\"/${WS_PATH}-tr\"}},\"sniffing\":{\"enabled\":true,\"destOverride\":[\"http\",\"tls\",\"quic\"],\"metadataOnly\":false}}" ;;
       ss-ws) NEW_BLOCK="{\"port\":${WS_PORT_h},\"listen\":\"127.0.0.1\",\"protocol\":\"shadowsocks\",\"tag\":\"${NODE_NAME} ss-ws\",\"settings\":{\"clients\":[{\"method\":\"chacha20-ietf-poly1305\",\"password\":\"${UUID}\"}],\"network\":\"tcp,udp\"},\"streamSettings\":{\"network\":\"ws\",\"wsSettings\":{\"path\":\"/${WS_PATH}-sh\"}},\"sniffing\":{\"enabled\":true,\"destOverride\":[\"http\",\"tls\",\"quic\"],\"metadataOnly\":false}}" ;;
-      vless-xhttp) NEW_BLOCK="{\"port\":${WS_PORT_i},\"listen\":\"127.0.0.1\",\"protocol\":\"vless\",\"tag\":\"${NODE_NAME} vless-xhttp\",\"settings\":{\"clients\":[{\"id\":\"${UUID}\",\"level\":0}],\"decryption\":\"${XHTTP_ENC:-none}\"},\"streamSettings\":{\"network\":\"xhttp\",\"xhttpSettings\":{\"path\":\"/${WS_PATH}-xh\",\"mode\":\"auto\"}}}" ;;
-      xhttp-h3-direct) NEW_BLOCK="{\"tag\":\"${NODE_NAME} xhttp-h3-direct\",\"port\":${XHTTP_PORT_j},\"protocol\":\"vless\",\"settings\":{\"clients\":[{\"id\":\"${UUID}\"}],\"decryption\":\"${XHTTP_ENC:-none}\"},\"streamSettings\":{\"network\":\"xhttp\",\"security\":\"tls\",\"xhttpSettings\":{\"mode\":\"stream-up\",\"extra\":{\"alpn\":[\"h3\"]},\"path\":\"/${WS_PATH}-xh3\"},\"tlsSettings\":{\"alpn\":[\"h3\"],\"certificates\":[{\"certificateFile\":\"${WORK_DIR}/cert/cert.pem\",\"keyFile\":\"${WORK_DIR}/cert/private.key\"}]}},\"sniffing\":{\"enabled\":true,\"destOverride\":[\"http\",\"tls\",\"quic\"]}}" ;;
+      vless-xhttp) NEW_BLOCK="{\"port\":${WS_PORT_i},\"listen\":\"127.0.0.1\",\"protocol\":\"vless\",\"tag\":\"${NODE_NAME} vless-xhttp\",\"settings\":{\"clients\":[{\"id\":\"${UUID}\",\"level\":0}],\"decryption\":\"${XHTTP_DEC:-none}\"},\"streamSettings\":{\"network\":\"xhttp\",\"xhttpSettings\":{\"path\":\"/${WS_PATH}-xh\",\"mode\":\"auto\"}}}" ;;
+      xhttp-h3-direct) NEW_BLOCK="{\"tag\":\"${NODE_NAME} xhttp-h3-direct\",\"port\":${XHTTP_PORT_j},\"protocol\":\"vless\",\"settings\":{\"clients\":[{\"id\":\"${UUID}\"}],\"decryption\":\"${XHTTP_DEC:-none}\"},\"streamSettings\":{\"network\":\"xhttp\",\"security\":\"tls\",\"xhttpSettings\":{\"mode\":\"stream-up\",\"extra\":{\"alpn\":[\"h3\"]},\"path\":\"/${WS_PATH}-xh3\"},\"tlsSettings\":{\"alpn\":[\"h3\"],\"certificates\":[{\"certificateFile\":\"${WORK_DIR}/cert/cert.pem\",\"keyFile\":\"${WORK_DIR}/cert/private.key\"}]}},\"sniffing\":{\"enabled\":true,\"destOverride\":[\"http\",\"tls\",\"quic\"]}}" ;;
       trojan-direct) NEW_BLOCK="{\"port\":${TROJAN_PORT},\"protocol\":\"trojan\",\"tag\":\"${NODE_NAME} trojan-direct\",\"settings\":{\"clients\":[{\"password\":\"${UUID}\"}]},\"streamSettings\":{\"network\":\"tcp\",\"security\":\"tls\",\"tlsSettings\":{\"serverName\":\"${TLS_SERVER}\",\"certificates\":[{\"certificateFile\":\"${WORK_DIR}/cert/cert.pem\",\"keyFile\":\"${WORK_DIR}/cert/private.key\"}]}},\"sniffing\":{\"enabled\":true,\"destOverride\":[\"http\",\"tls\",\"quic\"],\"metadataOnly\":false}}" ;;
       ss2022-direct) NEW_BLOCK="{\"port\":${SS2022_PORT},\"protocol\":\"shadowsocks\",\"tag\":\"${NODE_NAME} ss2022-direct\",\"settings\":{\"method\":\"2022-blake3-aes-128-gcm\",\"password\":\"${SS2022_PASSWORD}\",\"network\":\"tcp,udp\"},\"sniffing\":{\"enabled\":true,\"destOverride\":[\"http\",\"tls\",\"quic\"],\"metadataOnly\":false}}" ;;
       reality-vision) NEW_BLOCK="{\"tag\":\"${NODE_NAME} reality-vision\",\"protocol\":\"vless\",\"port\":${REALITY_PORT},\"settings\":{\"clients\":[{\"id\":\"${UUID}\",\"flow\":\"xtls-rprx-vision\"}],\"decryption\":\"none\"},\"streamSettings\":{\"network\":\"tcp\",\"security\":\"reality\",\"realitySettings\":{\"show\":false,\"dest\":\"${TLS_SERVER}:443\",\"xver\":0,\"serverNames\":[\"${TLS_SERVER}\"],\"privateKey\":\"${REALITY_PRIVATE}\",\"publicKey\":\"${REALITY_PUBLIC}\",\"shortIds\":[\"\"]}},\"sniffing\":{\"enabled\":true,\"destOverride\":[\"http\",\"tls\"]}}" ;;
