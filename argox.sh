@@ -3158,6 +3158,12 @@ EOF
   [ -s /usr/bin/argox ] && hint "\n $(text 62) "
 }
 
+ensure_shortcut_available() {
+  [ "$(id -u)" = '0' ] || return 0
+  [ -s "$WORK_DIR/argox.sh" ] || return 0
+  create_shortcut quiet >/dev/null 2>&1 || true
+}
+
 export_list() {
   check_arch
   check_system_info
