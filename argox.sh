@@ -474,6 +474,13 @@ write_custom() {
   fi
 }
 
+# 读取 custom 文件中的 key 值
+read_custom_value() {
+  local _KEY="$1"
+  [ -s "$CUSTOM_FILE" ] || return 0
+  awk -F= -v key="$_KEY" '$1 == key { print substr($0, index($0, "=") + 1); exit }' "$CUSTOM_FILE"
+}
+
 # 选择中英语言
 select_language() {
   if [ -z "$L" ]; then
